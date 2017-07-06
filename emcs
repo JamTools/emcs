@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+
+#-----------------------------------------------------------------------#
+# handleError
+
+handleError () {
+  if [ $# -ne 1 ]; then
+    1="Unknown error"
+  fi
+
+  echo -e "\nError: $1\n"
+  kill -s TERM $TOP_PID
+}
+
+#-----------------------------------------------------------------------#
+# getTimestamp: from hidden file else 0
+# $1 = root path                       ie, /media/4000/Audio
+
+getTimestamp () {
+  if [ $# -eq 1 ]; then
+    # read timestamp from file if exists
+    if [ -e "$1/.emcs-$label-timestamp" ]; then
+      echo `cat $1/.emcs-$label-timestamp`
+    else
+      echo '0'
+    fi
+  else
+    handleError "Lack of args to 'getTimestamp'"
+  fi
+}
+
+#-----------------------------------------------------------------------#
+# processDir: check directory & dump recursive file list
+# $1 = root path                       ie, /media/4000/Audio
+
+processDir () {
+  if [ $# -eq 1 ]; then
+    # check that directory exists
+    if [ -d "$1" ]; then
+      sd=$PWD
+      cd $1
+      # save recursive file/dir list to file
+      find . -regextype posix-egrep -regex '.+' | sort > $1/.emcs-$label-files
+      cd $sd
+    else
+      handleError "'$1' is not a directory"
+    fi
+  else
+    handleError "Lack of args to 'processDir'"
+  fi
+}
+
+#-----------------------------------------------------------------------#
+# removeF: remove file or folder
+# $1 = relative file/folder path       ie, ./String Cheese Incidient/2002
+# $2 = root path                       ie, /media/4000/Audio
+# $3 = sync timestamp                  ie, 1490199865
+# $4 = simulate/delete                 ie, 0=simulate 1=delete
+
+removeF () {
+  arg=("$@")
+  if [ $# -eq 4 ]; then
+    # translate relative path to full path
+    i=`echo $1 | sed -e "s/^\.//" | (echo -n $2 && cat)`
+
+    # delete if sync timestamp > last_modified of each
+    if [ "$3" -gt `stat -c %Y "$i"` ]; then
+      # if not a simulation
+      if [ "$4" -eq "1" ]; then
+        # if directory, delete recursively
+        if [ -d "$i" ]; then
+          rm -r "$i"
+        else
+          # check if file exists, then delete
+          if [ -e "$i" ]; then
+            rm "$i"
+          fi
+        fi
+      fi
+      echo -e "$1" # return this value
+    fi
+  else
+    handleError "Lack of args to 'removeF'"
+  fi
+}
+
+#-----------------------------------------------------------------------#
+# batchRemove: remove from one location what's not in another
+# $1 = root path                       ie, /media/4000/Audio
+# $2 = other path                      ie, /media/4001/Audio
+
+batchRemove () {
+  # check that file lists exist
+  if [ ! -e "$1/.emcs-$label-files" ] && 
+     [ ! -e "$2/.emcs-$label-files" ]; then
+
+    handleError "'.emcs-$label-files' list not found!"
+  fi
+
+  # timestamp: default to 0 if DNE
+  ts=`getTimestamp $1`
+
+  # exists in $1, but not in $2
+  diff=`comm -13 $2/.emcs-$label-files $1/.emcs-$label-files`
+
+  if [[ "$diff" != "" ]]; then
+    # simulate delete
+    count="0"
+    echo -e "\nSimulate deleting from '$1':"
+
+    while read -r line
+    do
+      items=("$line" "$1" $ts 0)
+      r=`removeF "${items[@]}"`
+
+      if [[ "$r" != "" ]]; then
+        count=$((count+1))
+        echo "$count: $r"
+      fi
+    done <<< "$(echo -e "$diff")"
+
+    # actual delete
+    if [ "$count" -gt "0" ]; then
+      read -p "Actually delete these files/folders? " -n 1 -r
+      echo ""
+      if [[ $REPLY =~ ^[Yy]$ ]]; then
+        while read -r line
+        do
+          items=("$line" "$1" $ts 1)
+          echo `removeF "${items[@]}"`
+        done <<< "$(echo -e "$diff")"
+      fi
+    fi
+  else
+    echo -e "\nNothing to delete from '$1'"
+  fi
+}
+
+#-----------------------------------------------------------------------#
+# main program
+
+# check for minimum required arguments
+if [ $# -ne 3 ]; then
+  echo -e "\nUsage: ./emcs.sh [label] [location1] [location2]\n"; exit 1
+fi
+
+label=$1 # save label to be used globally
+
+# to be able to exit entire program from within function
+trap "exit 1" TERM
+export TOP_PID=$$
+
+echo -e "\nMusic synchronization starting..."
+
+# update file lists
+processDir $2
+processDir $3
+
+# remove intentionally deleted files
+batchRemove $2 $3
+batchRemove $3 $2
+
+# determine current time (as integer)
+ct=`date +%s`
+
+# update sync timestamp
+echo "$ct" > $2/.emcs-$label-timestamp
+echo "$ct" > $3/.emcs-$label-timestamp 
+
+# remove file lists
+rm $2/.emcs-$label-files
+rm $3/.emcs-$label-files
+
+echo -e "\nSyncrhonizing with rsync..."
+rsync -r -t -v --size-only "$2/" "$3"
+rsync -r -t -v --size-only "$3/" "$2"
+
+echo -e "\nFinished."
