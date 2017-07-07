@@ -4,18 +4,26 @@ This is a process for synchronizing a music collection between two locations usi
 
 It is meant to support an evolving file/folder structure, removing files intentionally deleted on the other end.
 
+## Installation
+
+From this path, symlink `emcs` to user's bin directory:
+
+```
+ln -s `pwd`/emcs ~/bin/
+```
+
+### Updates
+
+From this path, run:
+
+```
+git pull
+```
+
 ## Usage
 
-To make the script executable, run:
-
 ```
-chmod +x emcs.sh
-```
-
-Now, run the script:
-
-```
-./emcs.sh [label] [location1] [location2]
+emcs [label] [location1] [location2]
 ```
 
 ## Process

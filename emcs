@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 
 #-----------------------------------------------------------------------#
-# handleError
+# handleError:
+
+# to be able to exit entire program from within function
+trap "exit 1" TERM
+export TOP_PID=$$
 
 handleError () {
   if [ $# -ne 1 ]; then
@@ -13,68 +17,43 @@ handleError () {
 }
 
 #-----------------------------------------------------------------------#
-# getTimestamp: from hidden file else 0
+# dumpFileList: check directory & dump recursive file list
 # $1 = root path                       ie, /media/4000/Audio
+# $2 = files label                     ie, files-latest
 
-getTimestamp () {
-  if [ $# -eq 1 ]; then
-    # read timestamp from file if exists
-    if [ -e "$1/.emcs-$label-timestamp" ]; then
-      echo `cat $1/.emcs-$label-timestamp`
-    else
-      echo '0'
-    fi
-  else
-    handleError "Lack of args to 'getTimestamp'"
-  fi
-}
-
-#-----------------------------------------------------------------------#
-# processDir: check directory & dump recursive file list
-# $1 = root path                       ie, /media/4000/Audio
-
-processDir () {
-  if [ $# -eq 1 ]; then
+dumpFileList () {
+  if [ $# -eq 2 ]; then
     # check that directory exists
     if [ -d "$1" ]; then
-      sd=$PWD
-      cd $1
       # save recursive file/dir list to file
-      find . -regextype posix-egrep -regex '.+' | sort > $1/.emcs-$label-files
-      cd $sd
+      # -printf '%P\n' removes the proceeding ./
+      find "$1" -regextype posix-egrep -regex '.+' -printf '%P\n' | \
+      sort > "$1/.emcs-$label-$2"
     else
       handleError "'$1' is not a directory"
     fi
   else
-    handleError "Lack of args to 'processDir'"
+    handleError "Lack of args to 'dumpFileList'"
   fi
 }
 
 #-----------------------------------------------------------------------#
 # removeF: remove file or folder
-# $1 = relative file/folder path       ie, ./String Cheese Incidient/2002
-# $2 = root path                       ie, /media/4000/Audio
-# $3 = sync timestamp                  ie, 1490199865
-# $4 = simulate/delete                 ie, 0=simulate 1=delete
+# $1 = file/folder path                ie, /media/4000/Audio/Phish/...
+# $2 = simulate/delete                 ie, 0=simulate 1=delete
 
 removeF () {
   arg=("$@")
-  if [ $# -eq 4 ]; then
-    # translate relative path to full path
-    i=`echo $1 | sed -e "s/^\.//" | (echo -n $2 && cat)`
-
-    # delete if sync timestamp > last_modified of each
-    if [ "$3" -gt `stat -c %Y "$i"` ]; then
+  if [ $# -eq 2 ]; then
+    # if file or directory exists
+    if [ -d "$1" ] || [ -e "$1" ]; then
       # if not a simulation
-      if [ "$4" -eq "1" ]; then
-        # if directory, delete recursively
-        if [ -d "$i" ]; then
-          rm -r "$i"
-        else
-          # check if file exists, then delete
-          if [ -e "$i" ]; then
-            rm "$i"
-          fi
+      if [ "$2" -eq "1" ]; then
+        # delete folder/file
+        if [ -d "$1" ]; then
+          rm -r "$1"
+        elif [ -e "$1" ]; then
+          rm "$1"
         fi
       fi
       echo -e "$1" # return this value
@@ -85,55 +64,64 @@ removeF () {
 }
 
 #-----------------------------------------------------------------------#
-# batchRemove: remove from one location what's not in another
+# determineDeleted:
+# $1 = root path                       ie, /media/4000/Audio
+
+determineDeleted () {
+  dumpFileList "$1" "files-latest"
+
+  if [ -e "$1/.emcs-$label-files" ]; then
+    # exists in 'files', but not in 'files-latest'
+    comm -13 "$1/.emcs-$label-files-latest" "$1/.emcs-$label-files" \
+    > "$1/.emcs-$label-deleted"
+  fi
+
+  rm "$1/.emcs-$label-files-latest"
+}
+
+#-----------------------------------------------------------------------#
+# removeDeleted: remove from one location what's not in another
 # $1 = root path                       ie, /media/4000/Audio
 # $2 = other path                      ie, /media/4001/Audio
 
-batchRemove () {
-  # check that file lists exist
-  if [ ! -e "$1/.emcs-$label-files" ] && 
-     [ ! -e "$2/.emcs-$label-files" ]; then
+removeDeleted () {
+  determineDeleted "$1"
 
-    handleError "'.emcs-$label-files' list not found!"
-  fi
+  if [ -e "$1/.emcs-$label-deleted" ] &&
+     [ $(stat -c%s "$1/.emcs-$label-deleted") -gt "0" ]; then
 
-  # timestamp: default to 0 if DNE
-  ts=`getTimestamp $1`
-
-  # exists in $1, but not in $2
-  diff=`comm -13 $2/.emcs-$label-files $1/.emcs-$label-files`
-
-  if [[ "$diff" != "" ]]; then
     # simulate delete
     count="0"
-    echo -e "\nSimulate deleting from '$1':"
-
-    while read -r line
+    echo -e "Simulate delete from '$2':"
+    while read line
     do
-      items=("$line" "$1" $ts 0)
+      items=("$2/$line" 0)
       r=`removeF "${items[@]}"`
 
       if [[ "$r" != "" ]]; then
         count=$((count+1))
         echo "$count: $r"
       fi
-    done <<< "$(echo -e "$diff")"
+    done < "$1/.emcs-$label-deleted"
 
     # actual delete
     if [ "$count" -gt "0" ]; then
       read -p "Actually delete these files/folders? " -n 1 -r
       echo ""
       if [[ $REPLY =~ ^[Yy]$ ]]; then
-        while read -r line
+        while read line
         do
-          items=("$line" "$1" $ts 1)
-          echo `removeF "${items[@]}"`
-        done <<< "$(echo -e "$diff")"
+          items=("$2/$line" 1)
+          removeF "${items[@]}"
+        done < "$1/.emcs-$label-deleted"
+        echo -e "Duplicate files from '$2' deleted!\n"
       fi
     fi
   else
-    echo -e "\nNothing to delete from '$1'"
+    echo -e "Nothing to delete from '$2'"
   fi
+
+  rm "$1/.emcs-$label-deleted"
 }
 
 #-----------------------------------------------------------------------#
@@ -141,38 +129,43 @@ batchRemove () {
 
 # check for minimum required arguments
 if [ $# -ne 3 ]; then
-  echo -e "\nUsage: ./emcs.sh [label] [location1] [location2]\n"; exit 1
+  echo -e "\nUsage: emcs [label] [location1] [location2]\n"; exit 1
 fi
 
-label=$1 # save label to be used globally
+# save label to be used globally
+label=$1
 
-# to be able to exit entire program from within function
-trap "exit 1" TERM
-export TOP_PID=$$
+# check first path
+dir1=`echo $2 | sed -e 's/\/$//'`
+if [ ! -d "$dir1" ]; then
+  echo -e "\nError: '$dir1' is not a directory.\n"; exit 1
+fi
 
-echo -e "\nMusic synchronization starting..."
+# check second path
+dir2=`echo $3 | sed -e 's/\/$//'`
+if [ ! -d "$dir2" ]; then
+  echo -e "\nError: '$dir2' is not a directory.\n"; exit 1
+fi
 
-# update file lists
-processDir $2
-processDir $3
+echo -e "\nEvolving Music Collection Synchronization (emcs):"
+echo -e "Label: $label"
+echo -e "Dir1: $dir1"
+echo -e "Dir2: $dir2"
+
+echo -e "\nChecking for intentionally deleted files..."
 
 # remove intentionally deleted files
-batchRemove $2 $3
-batchRemove $3 $2
+removeDeleted "$dir1" "$dir2"
+removeDeleted "$dir2" "$dir1"
 
-# determine current time (as integer)
-ct=`date +%s`
+echo -e "\nSyncrhonizing  to '$dir2'"
+rsync -r -t -v --size-only "$dir1/" "$dir2"
 
-# update sync timestamp
-echo "$ct" > $2/.emcs-$label-timestamp
-echo "$ct" > $3/.emcs-$label-timestamp 
+echo -e "\nSyncrhonizing  to '$dir1'"
+rsync -r -t -v --size-only "$dir2/" "$dir1"
 
-# remove file lists
-rm $2/.emcs-$label-files
-rm $3/.emcs-$label-files
-
-echo -e "\nSyncrhonizing with rsync..."
-rsync -r -t -v --size-only "$2/" "$3"
-rsync -r -t -v --size-only "$3/" "$2"
+echo -e "\nSaving updated file list..."
+dumpFileList "$dir1" "files"
+cp -f "$dir1/.emcs-$label-files" "$dir2/.emcs-$label-files"
 
 echo -e "\nFinished."
