@@ -114,14 +114,15 @@ removeDeleted () {
           items=("$2/$line" 1)
           removeF "${items[@]}"
         done < "$1/.emcs-$label-deleted"
-        echo -e "Duplicate files from '$2' deleted!\n"
       fi
     fi
   else
     echo -e "Nothing to delete from '$2'"
   fi
 
-  rm "$1/.emcs-$label-deleted"
+  if [ -e "$1/.emcs-$label-deleted" ]; then
+    rm "$1/.emcs-$label-deleted"
+  fi
 }
 
 #-----------------------------------------------------------------------#
