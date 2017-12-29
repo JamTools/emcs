@@ -159,11 +159,13 @@ echo -e "\nChecking for intentionally deleted files..."
 removeDeleted "$dir1" "$dir2"
 removeDeleted "$dir2" "$dir1"
 
+# ignore hidden files & folders: --exclude=".*"
+
 echo -e "\nSyncrhonizing  to '$dir2'"
-rsync -r -t -v --size-only "$dir1/" "$dir2"
+rsync -r -t -v --size-only --exclude=".*" "$dir1/" "$dir2"
 
 echo -e "\nSyncrhonizing  to '$dir1'"
-rsync -r -t -v --size-only "$dir2/" "$dir1"
+rsync -r -t -v --size-only --exclude=".*" "$dir2/" "$dir1"
 
 echo -e "\nSaving updated file list..."
 dumpFileList "$dir1" "files"

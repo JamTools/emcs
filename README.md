@@ -9,6 +9,7 @@ It is meant to support an evolving file/folder structure, removing files intenti
 From this path, symlink `emcs` to user's bin directory:
 
 ```
+if [ ! -d ~/bin ]; then mkdir ~/bin; source ~/.profile; fi
 ln -s `pwd`/emcs ~/bin/
 ```
 
