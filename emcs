@@ -17,23 +17,31 @@ handleError () {
 }
 
 #-----------------------------------------------------------------------#
-# dumpFileList: check directory & dump recursive file list
+# dumpFind: check directory & dump recursive file/folder list
 # $1 = root path                       ie, /media/4000/Audio
-# $2 = files label                     ie, files-latest
+# $2 = file/dir                        ie, f or d
+# $3 = label                           ie, files-latest
 
-dumpFileList () {
-  if [ $# -eq 2 ]; then
+dumpFind () {
+  if [ $# -eq 3 ]; then
     # check that directory exists
     if [ -d "$1" ]; then
-      # save recursive file/dir list to file
+      # save recursive file/dir list to file (ignore hidden)
       # -printf '%P\n' removes the proceeding ./
-      find "$1" -regextype posix-egrep -regex '.+' -printf '%P\n' | \
-      sort > "$1/.emcs-$label-$2"
+      if [ "$2" = "f" ]; then
+        find "$1" -not -path '*/\.*' -printf '%P\n' | \
+        sort > "$1/.emcs-$label-$3"
+      elif [ "$2" = "d" ]; then
+        find "$1" -type d -links 2 -not -path '*/\.*' \
+        -printf '%P\n' | sort > "$1/.emcs-$label-$3"
+      else
+        handleError "mode: file(f) or directory(d) not specified"
+      fi
     else
       handleError "'$1' is not a directory"
     fi
   else
-    handleError "Lack of args to 'dumpFileList'"
+    handleError "Lack of args to 'dumpFind'"
   fi
 }
 
@@ -68,7 +76,7 @@ removeF () {
 # $1 = root path                       ie, /media/4000/Audio
 
 determineDeleted () {
-  dumpFileList "$1" "files-latest"
+  dumpFind "$1" "f" "files-latest"
 
   if [ -e "$1/.emcs-$label-files" ]; then
     # exists in 'files', but not in 'files-latest'
@@ -126,6 +134,52 @@ removeDeleted () {
 }
 
 #-----------------------------------------------------------------------#
+# mostRecentlyUpdated: most recently updated file within folder
+# $1 = path                            ie, /media/4000/Audio
+
+mostRecentlyUpdated() {
+  find "$1" -type f -exec stat \{} --printf="%Y\n" \; \
+    | sort -r | head -n 1
+}
+
+#-----------------------------------------------------------------------#
+# updateModified: update existing dirs by last modified date
+
+updateModified() {
+  dumpFind "$dir1" "d" "dirs"
+  dumpFind "$dir2" "d" "dirs"
+
+  # common paths found in both
+  comm -12 "$dir1/.emcs-$label-dirs" "$dir2/.emcs-$label-dirs" \
+    > "$dir1/.emcs-$label-update"
+
+  # remove dumps
+  rm "$dir1/.emcs-$label-dirs"; rm "$dir2/.emcs-$label-dirs"
+
+  while read folder
+  do
+    # which folder most recently modified
+    dir1update=`mostRecentlyUpdated "$dir1/$folder"`
+    dir2update=`mostRecentlyUpdated "$dir2/$folder"`
+
+    if [ "$dir1update" = "" ]; then dir1update="0"; fi
+    if [ "$dir2update" = "" ]; then dir2update="0"; fi
+
+    if [ "$dir1update" -gt "$dir2update" ]; then
+      # dir1 is newer
+      echo -e "\nUpdating: $dir2/$folder"
+      rsync -r -t -v --exclude=".*" "$dir1/$folder/" "$dir2/$folder"
+    elif [ "$dir2update" -gt "$dir1update" ]; then
+      # dir2 is newer
+      echo -e "\nUpdating: $dir1/$folder"
+      rsync -r -t -v --exclude=".*" "$dir2/$folder/" "$dir1/$folder"
+    fi
+  done < "$dir1/.emcs-$label-update"
+
+  rm "$dir1/.emcs-$label-update"
+}
+
+#-----------------------------------------------------------------------#
 # main program
 
 # check for minimum required arguments
@@ -159,6 +213,9 @@ echo -e "\nChecking for intentionally deleted files..."
 removeDeleted "$dir1" "$dir2"
 removeDeleted "$dir2" "$dir1"
 
+echo -e "\nUpdating modified files..."
+updateModified
+
 # ignore hidden files & folders: --exclude=".*"
 
 echo -e "\nSyncrhonizing  to '$dir2'"
@@ -168,7 +225,7 @@ echo -e "\nSyncrhonizing  to '$dir1'"
 rsync -r -t -v --size-only --exclude=".*" "$dir2/" "$dir1"
 
 echo -e "\nSaving updated file list..."
-dumpFileList "$dir1" "files"
+dumpFind "$dir1" "f" "files"
 cp -f "$dir1/.emcs-$label-files" "$dir2/.emcs-$label-files"
 
 echo -e "\nFinished."
